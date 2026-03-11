@@ -1,32 +1,26 @@
 
 
 """
-Should I be creating the memberlist dictionary with emailID as key or member ID as key?
-What if a member forgets his ID, he should be able to find his member id by looking up his name/email ID. Name is not unique but the email ID is. Should I create two dictionaries - one with the member id as key and the other name or email_ID as key?
-For now, I am assuming that all members will know their member ID at all times.
-I am not having a logic for decativating members right now. I don't know what this means even.
-I am also not checking all the overdue books currently.
-I should also add try-except blocks to catch the exception raised in a user-firnedly way. Without Python showing a traceback.
-
-Explore dataclass.
-Explore getter and setter/ property decoraters.
-Make get functions to __str__ methods.
-
-Explore on adding data validation checks.
+Things that can be aded in future:
+    1. Deactivating members
+    2. Imposing fine on overdue books
+    3. Adding data validation if I am getting data from an external source in future.
+    4. Adding a loan dataclass to keep the loan acitivty separate and adding a return date for record keeping.
+    5. Creating custom exceptions for BookNotFound, MemberNotFound, NoCopiesAvailable etc. - Overkill?
 
 """
 
 
 import itertools
 from datetime import date, timedelta
-from dataclasses import dataclass
+from dataclasses import dataclass,field
 
 @dataclass
 class Book:
     isbn:  str
     title: str
     author: str
-    year: str
+    year: int
 
     def __str__(self) -> str:
 
@@ -40,15 +34,17 @@ class Book:
 class Member:
 
     full_name: str
-    date_of_birth: str
+    date_of_birth: date
     email_id: str
-    
+    member_id: int = field(default=None, init=False) # If I would have created the ID while creating the Member object, I could have used default_factory parameter to pass a id generator function in field().
+
     def __str__(self) -> str:
 
         return f'''The member information:
         Name: {self.full_name}
         DOB: {self.date_of_birth}
         Email ID: {self.email_id}
+        Member ID: {self.member_id}
         '''
 
 class Library:
@@ -58,6 +54,7 @@ class Library:
     def __init__(self):        
         self.book_inventory = {}
         self.member_list = {}
+        self.email_list = {}
 
     def add_book(self,book: Book, copies: int) -> str:
         if book.isbn in self.book_inventory:
@@ -73,53 +70,72 @@ class Library:
 
     def register_member(self, member: Member) -> str:
 
-        # How should I be checking if a person is already a member?
-        member_id = next(Library.id_generator)
-        self.member_list[member_id] = { 'member_info': member, 'join_date': date.today(), 'loan_activity': [] }
+        try:
 
-        return f"Member {member.full_name} registered successfully with member id: {member_id}."
+            if member.email_id.strip().lower() in self.email_list:
+                raise ValueError(f"Member already registered with {member.email_id}. The member ID is: {self.email_list[member.email_id]}")
+
+            new_member_id = next(Library.id_generator)
+
+            member.member_id = new_member_id
+            self.member_list[member.member_id] = { 'member_info': member, 'join_date': date.today(), 'loan_activity': [] }
+            self.email_list[member.email_id.strip().lower()] = member.member_id
+
+            return f"Member {member.full_name} registered successfully with member id: {member.member_id}."
+        
+        except ValueError as e:
+            return f"Error:{e}"
     
-    def checkout_book(self, book: Book, member_id: int) -> str:
-        if member_id not in self.member_list:
-            raise ValueError("Member not found!")
+    def checkout_book(self, isbn: str, member_id: int) -> str:
+
+        try:
+
+            if member_id not in self.member_list:
+                raise ValueError("Member not found!")
+            
+            if len(self.member_list[member_id]['loan_activity']) >= 5:
+                raise ValueError("Member already has 5 books loaned. That is the limit!")
+            
+            if not isbn in self.book_inventory or self.book_inventory[isbn]['available_copies'] == 0:
+                raise ValueError('Book is not available currently.')
+
+
+            self.book_inventory[isbn]['available_copies']-=1
+
+            checkout_details = { 'book_isbn': isbn, 'date_loaned' : date.today(), 'due_date': date.today()+timedelta(days=14) }
+            self.member_list[member_id]['loan_activity'].append(checkout_details)
+
+            return f"Successfully checked out the book {isbn} to {member_id}."
         
-        if len(self.member_list[member_id]['loan_activity']) == 5:
-            raise ValueError("Member already has 5 books loaned. That is the limit!")
-        
-        if not book.isbn in self.book_inventory or self.book_inventory[book.isbn]['available_copies'] == 0:
-            raise ValueError('Book is not available currently.')
-
-        self.book_inventory[book.isbn]['available_copies']-=1
-
-        checkout_details = { 'book_isbn': book.isbn, 'date_loaned' : date.today(), 'due_date': date.today()+timedelta(days=14) }
-        self.member_list[member_id]['loan_activity'].append(checkout_details)
-
-        return f"Successfully checked out the book {book.title} to {member_id}."
+        except ValueError as e:
+            return f"Error:{e}"
     
-    def return_book(self,book: Book, member_id: int) -> str:
-        is_book_loaned = False
+    def return_book(self,isbn: str, member_id: int) -> str:
 
-        if member_id not in self.member_list or book.isbn not in self.book_inventory:
-            raise ValueError("Invalid record! Either the member doesn't exists or the book ISBN doesn't exist!")
+        try:
+            is_book_loaned = False
 
-        books_loaned = self.member_list[member_id]['loan_activity']
+            if member_id not in self.member_list or isbn not in self.book_inventory:
+                raise ValueError("Invalid record! Either the member doesn't exists or the book ISBN doesn't exist!")
 
-        for book_info in books_loaned:
-            if book.isbn == book_info['book_isbn']:
-                is_book_loaned = True
+            books_loaned = self.member_list[member_id]['loan_activity']
+
+            for book_info in books_loaned:
+                if isbn == book_info['book_isbn']:
+                    is_book_loaned = True
+                    self.member_list[member_id]['loan_activity'].remove(book_info)
+                    break
+            
+            if not is_book_loaned:
+                raise ValueError(f"Record not found! Member {member_id} didn't loan the book {isbn}.")
+
+            # I can add a check to see if the return date is past due date and impose a fine or late fee in future.
+            self.book_inventory[isbn]['available_copies']+=1
+
+            return f"Member {member_id} returned the book {isbn} successfully."
         
-        if not is_book_loaned:
-            raise ValueError(f"Record not found! Member {member_id} didn't loan the book {book.title}.")
-
-        # I can add a check to see if the return date is past due date and impose a fine or late fee in future.
-        self.book_inventory[book.isbn]['available_copies']+=1
-
-        for book_info in books_loaned:
-            if book_info['book_isbn'] == book.isbn:
-                self.member_list[member_id]['loan_activity'].remove(book_info)
-
-
-        return f"Member {member_id} returned the book {book.title} successfully."
+        except ValueError as e:
+            return f"Error:{e}"
     
     def get_book_inventory(self) -> str:
         return f"Here is the library collection\n: {self.book_inventory}."
@@ -130,21 +146,30 @@ class Library:
     def get_books_loaned(self, member_id: int) -> str:
         return f"List of books loaned by member with ID {member_id}\n: {self.member_list[member_id]['loan_activity']}"
 
+    def get_available_copies(self,isbn: str) -> str:
+        return f"Available copies for the book {self.book_inventory[isbn]['book_info'].title} with ISBN {isbn} are: {self.book_inventory[isbn]['available_copies']}."
 
-book1 = Book('123-4', 'Are you afraid of the dark?', 'Sidney Sheldon', '2005')
-book2 = Book('123-5', "Harry Potter and the Sorcerer's Stone", 'JK Rowling', '1997')
+    def get_total_copies(self,isbn: str) -> str:
+        return f"Total copies for the book {self.book_inventory[isbn]['book_info'].title} with ISBN {isbn} are: {self.book_inventory[isbn]['total_copies']}."
+
+book1 = Book('123-4', 'Are you afraid of the dark?', 'Sidney Sheldon', 2005)
+book2 = Book('123-5', "Harry Potter and the Sorcerer's Stone", 'JK Rowling', 1997)
 # book3 = Book('123-4', 'Are you afraid of the dark? version2', 'SidneySheldon', '2005', 1)
 print(book2)
 lib1 = Library()
 print(lib1.add_book(book1,1))
 print(lib1.add_book(book2,1))
 print(lib1.add_book(book1,2))
-member1 = Member('Shalini Agarwal','01-12-1997', 'shalini@example.com')
+member1 = Member('Shalini Agarwal',date(1997,1,12), 'Shalini@example.com')
+print(member1)
 print(lib1.register_member(member1))
-print(lib1.checkout_book(book1,1))
-print(lib1.checkout_book(book1,1))
+print(lib1.checkout_book('123-4',1))
+print(lib1.checkout_book('123-4',1))
 print(lib1.get_member_list())
 print(lib1.get_book_inventory())
 print(member1)
 print(lib1.get_member_list())
 print(lib1.get_books_loaned(1))
+print(lib1.get_available_copies('123-4'))
+print(lib1.get_total_copies('123-4'))
+print(lib1.return_book('123-4',1))
